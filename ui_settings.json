@@ -1,0 +1,18 @@
+{
+  "ui_visibility": {
+    "prefilter_visible": true,
+    "postfilter_visible": true
+  },
+  "window": {
+    "geometry": "1400x900+104+104",
+    "title": "EtherCATパケット解析ビューア - 改善版"
+  },
+  "colors": {
+    "default_highlight_color": "#ffff00",
+    "highlight_transparency": 0.3
+  },
+  "performance": {
+    "cache_size": 1000,
+    "batch_size": 100
+  }
+}
