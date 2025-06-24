@@ -80,4 +80,4 @@ COLORS = {
     "error": "#FF0000",
     "warning": "#FFA500",
     "success": "#008000"
-} 
+}

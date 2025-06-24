@@ -390,4 +390,4 @@ def hex_to_binary(hex_str):
             return bin(int(hex_str, 16))[2:].zfill(len(hex_str) * 4)
         except ValueError:
             return '0'
-    return '0' 
+    return '0'

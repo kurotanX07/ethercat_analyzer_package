@@ -607,4 +607,4 @@ class DataHighlightDialog:
     def _cancel(self):
         """キャンセル"""
         self.result = None
-        self.dialog.destroy() 
+        self.dialog.destroy()

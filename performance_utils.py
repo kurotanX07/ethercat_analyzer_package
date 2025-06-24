@@ -204,4 +204,4 @@ def memory_usage_psutil():
     memory_info = process.memory_info()
     
     # MB単位に変換して返す
-    return memory_info.rss / (1024 * 1024) 
+    return memory_info.rss / (1024 * 1024)

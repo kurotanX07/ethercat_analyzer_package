@@ -6,10 +6,19 @@ import struct
 import binascii
 import tkinter as tk
 import json
-from tkinter import Tk, filedialog, ttk, Frame, Button, Label, Scrollbar, VERTICAL, HORIZONTAL, RIGHT, BOTTOM, X, Y, END, Text, WORD, DISABLED, NORMAL, StringVar, Entry, Checkbutton, IntVar, LabelFrame, colorchooser
+from tkinter import Tk, filedialog, ttk, Frame, Button, Label, Scrollbar, VERTICAL, HORIZONTAL, RIGHT, BOTTOM, X, Y, END, Text, WORD, DISABLED, NORMAL, StringVar, Entry, Checkbutton, IntVar, LabelFrame, colorchooser, messagebox
 from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+# ボード定義関連モジュールのインポート（オプショナル）
+try:
+    from board_definition_parser import BoardDefinitionParser
+    from board_definition_dialog import BoardDefinitionDialog
+    BOARD_DEFINITION_AVAILABLE = True
+except ImportError:
+    BOARD_DEFINITION_AVAILABLE = False
+    print("警告: ボード定義モジュールが見つかりません。ボード定義機能は無効です。")
 
 class PCAPViewer:
 
@@ -25,6 +34,14 @@ class PCAPViewer:
         self.is_ethernet_filtered = False # EtherCATフィルタリング状態フラグ
         self.is_basic_filtered = False # 基本フィルタリング状態フラグ
         self.pcap_file = None
+
+        # ボード定義管理
+        if BOARD_DEFINITION_AVAILABLE:
+            self.board_definition_dialog = BoardDefinitionDialog(root)
+            self.board_parser = self.board_definition_dialog.get_parser()
+        else:
+            self.board_definition_dialog = None
+            self.board_parser = None
 
         # 変数の初期化
         self.advanced_filter_var = StringVar()
@@ -133,6 +150,11 @@ class PCAPViewer:
         # フィルタ設定保存ボタン
         self.save_filter_defaults_btn = Button(self.btn_frame, text="フィルタ設定を保存", command=self.save_filter_defaults)
         self.save_filter_defaults_btn.pack(side=tk.LEFT, padx=5)
+
+        # ボード定義管理ボタン
+        if BOARD_DEFINITION_AVAILABLE:
+            self.board_def_btn = Button(self.btn_frame, text="ボード定義管理", command=self.open_board_definition_dialog)
+            self.board_def_btn.pack(side=tk.LEFT, padx=5)
 
         # ファイル情報フレーム
         self.file_info_frame = Frame(self.main_frame)
@@ -651,34 +673,61 @@ class PCAPViewer:
             if hasattr(packet, 'eth'):
                 # 特定フィルタ条件に一致するか確認
                 is_specific_condition = False
-                if hasattr(packet, 'eth') and hasattr(packet, 'ecat'):
+                should_include_packet = False
+                
+                if hasattr(packet, 'eth'):
                     eth_addr = packet.eth.src if hasattr(packet.eth, 'src') else ""
                     eth_addr_dst = packet.eth.dst if hasattr(packet.eth, 'dst') else ""
-                    ecat_cmd = packet.ecat.cmd if hasattr(packet.ecat, 'cmd') else ""
                     
-                    # フィルタ条件: ((eth.addr == 02:10:b6:18:35:30) && !(ecat.cnd == 0x04)) && !(ecat.cmd == 0x05)
-                    # 02以降の値はデータによって変更があるため、先頭が02のMACアドレスに一致するように変更
+                    # MACアドレスのチェック
                     eth_addr_match = eth_addr.startswith("02:") or eth_addr_dst.startswith("02:")
-                    ecat_cmd_not_04 = (ecat_cmd != "0x04" and ecat_cmd != "04")
-                    ecat_cmd_not_05 = (ecat_cmd != "0x05" and ecat_cmd != "05")
                     
-                    if eth_addr_match and ecat_cmd_not_04 and ecat_cmd_not_05:
-                        is_specific_condition = True
-                        packet_length = int(packet.length) if hasattr(packet, 'length') else 0
-                        specific_filter_data['total_bytes'] += packet_length
-                        
-                        # 時間情報を記録
-                        current_time = packet.sniff_time if hasattr(packet, 'sniff_time') else None
-                        if current_time:
-                            if specific_filter_data['start_time'] is None or current_time < specific_filter_data['start_time']:
-                                specific_filter_data['start_time'] = current_time
-                            if specific_filter_data['end_time'] is None or current_time > specific_filter_data['end_time']:
-                                specific_filter_data['end_time'] = current_time
-                        
-                        specific_filter_data['packets'].append({
-                            'length': packet_length,
-                            'time': current_time
-                        })
+                    if eth_addr_match:
+                        # EtherCATパケットの場合、すべてのデータグラムをチェック
+                        if hasattr(packet, 'ecat'):
+                            # まず、パケットのraw dataを解析してすべてのデータグラムを取得
+                            try:
+                                raw_data = packet.get_raw_packet()
+                                formatted_data = ' '.join(f'{byte:02x}' for byte in raw_data)
+                                formatted_data2 = formatted_data.replace(" ", "")
+                                
+                                # EtherCATデータ解析
+                                ethercat_data = self.parse_ethercat_data(formatted_data2)
+                                
+                                if ethercat_data and 'EtherCAT_Datagrams' in ethercat_data:
+                                    # すべてのデータグラムをチェック
+                                    all_cmds_valid = True
+                                    
+                                    for datagram in ethercat_data['EtherCAT_Datagrams']:
+                                        cmd = datagram.get('Cmd', '')
+                                        # cmdが04または05の場合は除外
+                                        if cmd.lower() in ['04', '05', '0x04', '0x05']:
+                                            all_cmds_valid = False
+                                            break
+                                    
+                                    # すべてのコマンドが04、05以外の場合のみ含める
+                                    if all_cmds_valid and len(ethercat_data['EtherCAT_Datagrams']) > 0:
+                                        should_include_packet = True
+                                        is_specific_condition = True
+                            except Exception as e:
+                                print(f"フィルタチェック中のエラー: {e}")
+                
+                if should_include_packet:
+                    packet_length = int(packet.length) if hasattr(packet, 'length') else 0
+                    specific_filter_data['total_bytes'] += packet_length
+                    
+                    # 時間情報を記録
+                    current_time = packet.sniff_time if hasattr(packet, 'sniff_time') else None
+                    if current_time:
+                        if specific_filter_data['start_time'] is None or current_time < specific_filter_data['start_time']:
+                            specific_filter_data['start_time'] = current_time
+                        if specific_filter_data['end_time'] is None or current_time > specific_filter_data['end_time']:
+                            specific_filter_data['end_time'] = current_time
+                    
+                    specific_filter_data['packets'].append({
+                        'length': packet_length,
+                        'time': current_time
+                    })
 
                 # packetがecat属性を持っているか確認
                 if hasattr(packet, 'ecat'):
@@ -777,12 +826,12 @@ class PCAPViewer:
                         avg_bytes_display = f"{avg_bytes_per_sec:.2f} B/s"
                     
                     # スループット情報をラベルに表示
-                    throughput_text = f"指定フィルタ条件一致: {len(specific_filter_data['packets'])}パケット | 平均: {avg_bytes_display} ({avg_bits_display})"
+                    throughput_text = f"フィルタ条件(eth.addr=02:* && cmd!=04 && cmd!=05): {len(specific_filter_data['packets'])}パケット | 平均: {avg_bytes_display} ({avg_bits_display})"
                     self.throughput_label.config(text=throughput_text)
             else:
-                self.throughput_label.config(text="指定フィルタ条件一致: 計算できません（時間範囲がありません）")
+                self.throughput_label.config(text="フィルタ条件(eth.addr=02:* && cmd!=04 && cmd!=05): 計算できません（時間範囲がありません）")
         else:
-            self.throughput_label.config(text="指定フィルタ条件に一致するパケットはありません")
+            self.throughput_label.config(text="フィルタ条件(eth.addr=02:* && cmd!=04 && cmd!=05): 0パケット")
 
         self.filtered_data = self.all_data.copy()
         
@@ -795,24 +844,61 @@ class PCAPViewer:
         """Wiresharkスタイルの情報フィールドを生成"""
         try:
             # EtherCATパケットの場合
-            if hasattr(packet, 'ecat') and hasattr(packet.ecat, 'ethercat_datagram'):
-                info = []
-                
-                # コマンドとインデックスの情報を取得
-                cmd = packet.ecat.cmd if hasattr(packet.ecat, 'cmd') else "Unknown"
-                cmd_desc = self.ethercat_cmd_dict.get(cmd.lower(), f"CMD:{cmd}")
-                info.append(cmd_desc)
-                
-                # LogAddrがあれば追加
-                if hasattr(packet.ecat, 'logaddr'):
-                    info.append(f"LogAddr: 0x{packet.ecat.logaddr}")
-                
-                # パケット数
-                if hasattr(packet.ecat, 'ethercat_datagram'):
-                    datagram_count = packet.ecat.ethercat_datagram
-                    info.append(f"Datagram: {datagram_count}")
-                
-                return " | ".join(info)
+            if hasattr(packet, 'ecat'):
+                # パケットのraw dataを解析して実際のデータグラム情報を取得
+                try:
+                    raw_data = packet.get_raw_packet()
+                    formatted_data = ' '.join(f'{byte:02x}' for byte in raw_data)
+                    formatted_data2 = formatted_data.replace(" ", "")
+                    
+                    # EtherCATデータ解析
+                    ethercat_data = self.parse_ethercat_data(formatted_data2)
+                    
+                    if ethercat_data and 'EtherCAT_Datagrams' in ethercat_data:
+                        datagrams = ethercat_data['EtherCAT_Datagrams']
+                        cmd_count = len(datagrams)
+                        
+                        # 合計データ長を計算
+                        total_data_length = sum(dg.get('DataLength_dec', 0) for dg in datagrams)
+                        
+                        # Wiresharkスタイルの情報フィールドを生成
+                        info = f"{cmd_count} Cmds, SumLen {total_data_length}"
+                        
+                        # コマンドの詳細を追加（最大3つまで表示）
+                        cmd_details = []
+                        for i, dg in enumerate(datagrams[:3]):
+                            cmd = dg.get('Cmd', '')
+                            cmd_desc = self.ethercat_cmd_dict.get(cmd.lower(), f"CMD:{cmd}")
+                            # コマンドの短縮形を使用
+                            cmd_short = cmd_desc.split()[0]  # "LRW (Logical Read Write)" -> "LRW"
+                            
+                            # LogAddrがある場合はボード名も追加
+                            log_addr = dg.get('LogAddr', '')
+                            if log_addr:
+                                if self.board_parser:
+                                    board_name = self.board_parser.get_board_name(log_addr)
+                                    if board_name:
+                                        cmd_details.append(f"{cmd_short}@{board_name}")
+                                    else:
+                                        cmd_details.append(f"{cmd_short}@0x{log_addr}")
+                                else:
+                                    cmd_details.append(f"{cmd_short}@0x{log_addr}")
+                            else:
+                                cmd_details.append(cmd_short)
+                        
+                        if cmd_details:
+                            info += " [" + ", ".join(cmd_details)
+                            if len(datagrams) > 3:
+                                info += ", ..."
+                            info += "]"
+                        
+                        return info
+                    else:
+                        # EtherCATデータが解析できなかった場合のフォールバック
+                        return "1 Cmds, SumLen 0"
+                except Exception as e:
+                    print(f"EtherCAT data parsing error in info field: {e}")
+                    return "1 Cmds, SumLen 0"
             # その他のプロトコル
             else:
                 return "Non-EtherCAT packet"
@@ -1144,11 +1230,22 @@ class PCAPViewer:
                     self.ethercat_text.insert(END, f"Cmd: 0x{cmd_value} ({cmd_desc})\n")
                     self.ethercat_text.insert(END, f"Index: 0x{datagram.get('Index', '')}\n")
                     
-                    # LogAddrに加えてADPとADOも表示
+                    # LogAddrに加えてADPとADOも表示（ボード名付き）
                     log_addr = datagram.get('LogAddr', '')
                     adp = datagram.get('ADP', '')
                     ado = datagram.get('ADO', '')
-                    self.ethercat_text.insert(END, f"Log Addr: 0x{log_addr}\n")
+                    
+                    # ボード名を取得して表示
+                    if self.board_parser:
+                        board_info = self.board_parser.get_formatted_board_info(log_addr)
+                    else:
+                        board_info = log_addr
+                    
+                    self.ethercat_text.insert(END, f"Log Addr: 0x{log_addr}")
+                    if board_info != log_addr:  # ボード名が見つかった場合
+                        self.ethercat_text.insert(END, f" → {board_info}")
+                    self.ethercat_text.insert(END, "\n")
+                    
                     self.ethercat_text.insert(END, f"ADP (Address Position): 0x{adp}\n")
                     self.ethercat_text.insert(END, f"ADO (Address Offset): 0x{ado}\n")
                     self.ethercat_text.insert(END, f"Length (hex): 0x{datagram.get('Length_hex', '')}\n")
@@ -1569,8 +1666,15 @@ class PCAPViewer:
     def save_filter_defaults(self):
         """現在のフィルタ設定をデフォルト値として保存"""
         pass
+    
+    def open_board_definition_dialog(self):
+        """ボード定義管理ダイアログを開く"""
+        if self.board_definition_dialog:
+            self.board_definition_dialog.show()
+        else:
+            messagebox.showwarning("警告", "ボード定義機能は利用できません。")
 
 if __name__ == "__main__":
     root = Tk()
     app = PCAPViewer(root)
-    root.mainloop() 
+    root.mainloop()

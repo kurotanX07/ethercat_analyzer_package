@@ -86,4 +86,4 @@ class FilterError(Exception):
 
 class DataProcessingError(Exception):
     """データ処理関連のエラー"""
-    pass 
+    pass
