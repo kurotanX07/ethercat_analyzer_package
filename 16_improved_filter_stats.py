@@ -6,7 +6,7 @@ import struct
 import binascii
 import tkinter as tk
 import json
-from tkinter import Tk, filedialog, ttk, Frame, Button, Label, Scrollbar, VERTICAL, HORIZONTAL, RIGHT, BOTTOM, X, Y, END, Text, WORD, DISABLED, NORMAL, StringVar, Entry, Checkbutton, IntVar, LabelFrame, colorchooser, messagebox
+from tkinter import Tk, filedialog, ttk, Frame, Button, Label, Scrollbar, VERTICAL, HORIZONTAL, RIGHT, BOTTOM, X, Y, END, Text, WORD, DISABLED, NORMAL, StringVar, Entry, Checkbutton, IntVar, LabelFrame, colorchooser, messagebox, Toplevel
 from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -19,6 +19,14 @@ try:
 except ImportError:
     BOARD_DEFINITION_AVAILABLE = False
     print("警告: ボード定義モジュールが見つかりません。ボード定義機能は無効です。")
+
+# データフロー解析モジュールのインポート（オプショナル）
+try:
+    from data_flow_analyzer import DataFlowAnalyzer
+    DATA_FLOW_ANALYZER_AVAILABLE = True
+except ImportError:
+    DATA_FLOW_ANALYZER_AVAILABLE = False
+    print("警告: データフロー解析モジュールが見つかりません。データ解析機能は無効です。")
 
 class PCAPViewer:
 
@@ -155,6 +163,17 @@ class PCAPViewer:
         if BOARD_DEFINITION_AVAILABLE:
             self.board_def_btn = Button(self.btn_frame, text="ボード定義管理", command=self.open_board_definition_dialog)
             self.board_def_btn.pack(side=tk.LEFT, padx=5)
+
+        # 周期分析ボタン
+        self.period_analysis_btn = Button(self.btn_frame, text="周期分析", command=self.show_period_analysis)
+        self.period_analysis_btn.pack(side=tk.LEFT, padx=5)
+        self.period_analysis_btn.config(state=tk.DISABLED)  # 初期状態では無効
+
+        # データ解析ボタン
+        if DATA_FLOW_ANALYZER_AVAILABLE:
+            self.data_analysis_btn = Button(self.btn_frame, text="データ解析", command=self.show_data_analysis)
+            self.data_analysis_btn.pack(side=tk.LEFT, padx=5)
+            self.data_analysis_btn.config(state=tk.DISABLED)  # 初期状態では無効
 
         # ファイル情報フレーム
         self.file_info_frame = Frame(self.main_frame)
@@ -359,6 +378,9 @@ class PCAPViewer:
             self.process_pcap_file()
             self.export_btn.config(state=tk.NORMAL) # CSVエクスポートボタンを有効化
             self.export_excel_btn.config(state=tk.NORMAL) # Excelエクスポートボタンを有効化
+            self.period_analysis_btn.config(state=tk.NORMAL) # 周期分析ボタンを有効化
+            if DATA_FLOW_ANALYZER_AVAILABLE:
+                self.data_analysis_btn.config(state=tk.NORMAL) # データ解析ボタンを有効化
         except Exception as e:
             self.status_bar.config(text=f"エラー: {str(e)}")
             print(f"例外の詳細: {e}") # デバッグ用
@@ -683,34 +705,8 @@ class PCAPViewer:
                     eth_addr_match = eth_addr.startswith("02:") or eth_addr_dst.startswith("02:")
                     
                     if eth_addr_match:
-                        # EtherCATパケットの場合、すべてのデータグラムをチェック
-                        if hasattr(packet, 'ecat'):
-                            # まず、パケットのraw dataを解析してすべてのデータグラムを取得
-                            try:
-                                raw_data = packet.get_raw_packet()
-                                formatted_data = ' '.join(f'{byte:02x}' for byte in raw_data)
-                                formatted_data2 = formatted_data.replace(" ", "")
-                                
-                                # EtherCATデータ解析
-                                ethercat_data = self.parse_ethercat_data(formatted_data2)
-                                
-                                if ethercat_data and 'EtherCAT_Datagrams' in ethercat_data:
-                                    # すべてのデータグラムをチェック
-                                    all_cmds_valid = True
-                                    
-                                    for datagram in ethercat_data['EtherCAT_Datagrams']:
-                                        cmd = datagram.get('Cmd', '')
-                                        # cmdが04または05の場合は除外
-                                        if cmd.lower() in ['04', '05', '0x04', '0x05']:
-                                            all_cmds_valid = False
-                                            break
-                                    
-                                    # すべてのコマンドが04、05以外の場合のみ含める
-                                    if all_cmds_valid and len(ethercat_data['EtherCAT_Datagrams']) > 0:
-                                        should_include_packet = True
-                                        is_specific_condition = True
-                            except Exception as e:
-                                print(f"フィルタチェック中のエラー: {e}")
+                        should_include_packet = True
+                        is_specific_condition = True
                 
                 if should_include_packet:
                     packet_length = int(packet.length) if hasattr(packet, 'length') else 0
@@ -826,12 +822,12 @@ class PCAPViewer:
                         avg_bytes_display = f"{avg_bytes_per_sec:.2f} B/s"
                     
                     # スループット情報をラベルに表示
-                    throughput_text = f"フィルタ条件(eth.addr=02:* && cmd!=04 && cmd!=05): {len(specific_filter_data['packets'])}パケット | 平均: {avg_bytes_display} ({avg_bits_display})"
+                    throughput_text = f"フィルタ条件(eth.addr=02:*): {len(specific_filter_data['packets'])}パケット | 平均: {avg_bytes_display} ({avg_bits_display})"
                     self.throughput_label.config(text=throughput_text)
             else:
-                self.throughput_label.config(text="フィルタ条件(eth.addr=02:* && cmd!=04 && cmd!=05): 計算できません（時間範囲がありません）")
+                self.throughput_label.config(text="フィルタ条件(eth.addr=02:*): 計算できません（時間範囲がありません）")
         else:
-            self.throughput_label.config(text="フィルタ条件(eth.addr=02:* && cmd!=04 && cmd!=05): 0パケット")
+            self.throughput_label.config(text="フィルタ条件(eth.addr=02:*): 0パケット")
 
         self.filtered_data = self.all_data.copy()
         
@@ -1673,6 +1669,304 @@ class PCAPViewer:
             self.board_definition_dialog.show()
         else:
             messagebox.showwarning("警告", "ボード定義機能は利用できません。")
+    
+    def show_period_analysis(self):
+        """周期分析ウィンドウを表示"""
+        if not self.all_data:
+            messagebox.showwarning("警告", "分析するデータがありません。")
+            return
+        
+        # 周期分析ウィンドウを作成
+        analysis_window = Toplevel(self.root)
+        analysis_window.title("周期分析")
+        analysis_window.geometry("1200x800")
+        
+        # メインフレーム
+        main_frame = Frame(analysis_window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # コントロールフレーム
+        control_frame = Frame(main_frame)
+        control_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # フィルタ選択
+        Label(control_frame, text="分析対象:").pack(side=tk.LEFT, padx=5)
+        
+        filter_var = StringVar()
+        filter_combo = ttk.Combobox(control_frame, textvariable=filter_var, width=30)
+        filter_combo['values'] = ["全パケット", "Source MACアドレス別", "EtherCAT Cmd別", "LogAddr別"]
+        filter_combo.current(0)
+        filter_combo.pack(side=tk.LEFT, padx=5)
+        
+        # 分析実行ボタン
+        analyze_btn = Button(control_frame, text="分析実行", 
+                           command=lambda: self.analyze_period(analysis_window, main_frame, filter_var.get()))
+        analyze_btn.pack(side=tk.LEFT, padx=10)
+        
+        # グラフ表示エリア
+        graph_frame = Frame(main_frame)
+        graph_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 初期分析を実行
+        self.analyze_period(analysis_window, main_frame, "全パケット")
+    
+    def analyze_period(self, window, parent_frame, filter_type):
+        """周期分析を実行してグラフを表示"""
+        # 既存のグラフをクリア
+        for widget in parent_frame.winfo_children():
+            if isinstance(widget, Frame) and widget != parent_frame.winfo_children()[0]:
+                widget.destroy()
+        
+        # 新しいグラフフレーム
+        graph_frame = Frame(parent_frame)
+        graph_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # データの準備
+        data_to_analyze = self.filtered_data if self.is_filtered else self.all_data
+        
+        if filter_type == "全パケット":
+            self.plot_period_analysis_all(graph_frame, data_to_analyze)
+        elif filter_type == "Source MACアドレス別":
+            self.plot_period_analysis_by_source(graph_frame, data_to_analyze)
+        elif filter_type == "EtherCAT Cmd別":
+            self.plot_period_analysis_by_cmd(graph_frame, data_to_analyze)
+        elif filter_type == "LogAddr別":
+            self.plot_period_analysis_by_logaddr(graph_frame, data_to_analyze)
+    
+    def plot_period_analysis_all(self, parent_frame, data):
+        """全パケットの周期分析グラフを表示"""
+        # 時間差データを抽出
+        time_diffs = []
+        packet_numbers = []
+        
+        for packet in data:
+            if packet.get('TimeDiff') is not None:
+                time_diffs.append(packet['TimeDiff'])
+                packet_numbers.append(packet['No'])
+        
+        if not time_diffs:
+            Label(parent_frame, text="時間差データがありません。").pack()
+            return
+        
+        # グラフを作成
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
+        
+        # 時間差の推移グラフ
+        ax1.plot(packet_numbers, time_diffs, 'b-', linewidth=0.5)
+        ax1.set_xlabel('パケット番号')
+        ax1.set_ylabel('時間差 (ms)')
+        ax1.set_title('パケット間時間差の推移')
+        ax1.grid(True, alpha=0.3)
+        
+        # 平均値と標準偏差を計算
+        mean_diff = sum(time_diffs) / len(time_diffs)
+        std_diff = (sum((x - mean_diff) ** 2 for x in time_diffs) / len(time_diffs)) ** 0.5
+        
+        # 平均値のラインを追加
+        ax1.axhline(y=mean_diff, color='r', linestyle='--', label=f'平均: {mean_diff:.3f}ms')
+        ax1.axhline(y=mean_diff + std_diff, color='g', linestyle=':', label=f'±σ: {std_diff:.3f}ms')
+        ax1.axhline(y=mean_diff - std_diff, color='g', linestyle=':')
+        ax1.legend()
+        
+        # ヒストグラム
+        ax2.hist(time_diffs, bins=50, alpha=0.7, color='blue', edgecolor='black')
+        ax2.set_xlabel('時間差 (ms)')
+        ax2.set_ylabel('頻度')
+        ax2.set_title('時間差の分布')
+        ax2.grid(True, alpha=0.3)
+        
+        # 統計情報を追加
+        stats_text = f'平均: {mean_diff:.3f}ms\n標準偏差: {std_diff:.3f}ms\n最小: {min(time_diffs):.3f}ms\n最大: {max(time_diffs):.3f}ms'
+        ax2.text(0.7, 0.95, stats_text, transform=ax2.transAxes, 
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        plt.tight_layout()
+        
+        # Tkinterに埋め込む
+        canvas = FigureCanvasTkAgg(fig, parent_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    
+    def plot_period_analysis_by_source(self, parent_frame, data):
+        """送信元MACアドレス別の周期分析グラフを表示"""
+        # MACアドレス別にデータを分類
+        mac_data = {}
+        
+        for packet in data:
+            if packet.get('TimeDiff') is not None:
+                src_mac = packet.get('Source', 'Unknown')
+                if src_mac not in mac_data:
+                    mac_data[src_mac] = {'time_diffs': [], 'packet_numbers': []}
+                mac_data[src_mac]['time_diffs'].append(packet['TimeDiff'])
+                mac_data[src_mac]['packet_numbers'].append(packet['No'])
+        
+        if not mac_data:
+            Label(parent_frame, text="時間差データがありません。").pack()
+            return
+        
+        # グラフを作成
+        num_macs = len(mac_data)
+        fig, axes = plt.subplots(num_macs, 1, figsize=(12, 4 * num_macs), squeeze=False)
+        
+        for idx, (mac, mac_info) in enumerate(sorted(mac_data.items())):
+            ax = axes[idx, 0]
+            
+            # 時間差の推移グラフ
+            ax.plot(mac_info['packet_numbers'], mac_info['time_diffs'], '-', linewidth=0.5)
+            ax.set_xlabel('パケット番号')
+            ax.set_ylabel('時間差 (ms)')
+            ax.set_title(f'送信元: {mac}')
+            ax.grid(True, alpha=0.3)
+            
+            # 平均値を計算して表示
+            if mac_info['time_diffs']:
+                mean_diff = sum(mac_info['time_diffs']) / len(mac_info['time_diffs'])
+                ax.axhline(y=mean_diff, color='r', linestyle='--', 
+                          label=f'平均: {mean_diff:.3f}ms')
+                ax.legend()
+        
+        plt.tight_layout()
+        
+        # Tkinterに埋め込む
+        canvas = FigureCanvasTkAgg(fig, parent_frame)
+        canvas.draw()
+        
+        # スクロール可能にする
+        canvas_frame = Frame(parent_frame)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        
+        v_scrollbar = Scrollbar(canvas_frame, orient=VERTICAL)
+        v_scrollbar.pack(side=RIGHT, fill=Y)
+        
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(side=LEFT, fill=tk.BOTH, expand=True)
+        canvas_widget.config(scrollregion=canvas_widget.bbox("all"))
+        
+        v_scrollbar.config(command=canvas_widget.yview)
+        canvas_widget.config(yscrollcommand=v_scrollbar.set)
+    
+    def plot_period_analysis_by_cmd(self, parent_frame, data):
+        """EtherCAT Cmd別の周期分析グラフを表示"""
+        # Cmd別にデータを分類
+        cmd_data = {}
+        
+        for packet in data:
+            if packet.get('TimeDiff') is not None and packet.get('EtherCAT'):
+                ethercat_data = packet['EtherCAT']
+                if 'EtherCAT_Datagrams' in ethercat_data:
+                    for datagram in ethercat_data['EtherCAT_Datagrams']:
+                        cmd = datagram.get('Cmd', 'Unknown')
+                        cmd_desc = self.ethercat_cmd_dict.get(cmd.lower(), f"CMD:{cmd}")
+                        
+                        if cmd_desc not in cmd_data:
+                            cmd_data[cmd_desc] = {'time_diffs': [], 'packet_numbers': []}
+                        cmd_data[cmd_desc]['time_diffs'].append(packet['TimeDiff'])
+                        cmd_data[cmd_desc]['packet_numbers'].append(packet['No'])
+        
+        if not cmd_data:
+            Label(parent_frame, text="EtherCATコマンドデータがありません。").pack()
+            return
+        
+        # グラフを作成
+        num_cmds = len(cmd_data)
+        fig, axes = plt.subplots(num_cmds, 1, figsize=(12, 4 * num_cmds), squeeze=False)
+        
+        for idx, (cmd, cmd_info) in enumerate(sorted(cmd_data.items())):
+            ax = axes[idx, 0]
+            
+            # 時間差の推移グラフ
+            ax.plot(cmd_info['packet_numbers'], cmd_info['time_diffs'], '-', linewidth=0.5)
+            ax.set_xlabel('パケット番号')
+            ax.set_ylabel('時間差 (ms)')
+            ax.set_title(f'コマンド: {cmd}')
+            ax.grid(True, alpha=0.3)
+            
+            # 平均値を計算して表示
+            if cmd_info['time_diffs']:
+                mean_diff = sum(cmd_info['time_diffs']) / len(cmd_info['time_diffs'])
+                ax.axhline(y=mean_diff, color='r', linestyle='--', 
+                          label=f'平均: {mean_diff:.3f}ms')
+                ax.legend()
+        
+        plt.tight_layout()
+        
+        # Tkinterに埋め込む
+        canvas = FigureCanvasTkAgg(fig, parent_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    
+    def show_data_analysis(self):
+        """データ解析ウィンドウを表示"""
+        if not DATA_FLOW_ANALYZER_AVAILABLE:
+            messagebox.showwarning("警告", "データ解析機能は利用できません。")
+            return
+            
+        if not self.all_data:
+            messagebox.showwarning("警告", "解析するデータがありません。")
+            return
+            
+        # データ解析ウィンドウを作成
+        analyzer = DataFlowAnalyzer(self.root, self.all_data, self.board_parser)
+        analyzer.show()
+    
+    def plot_period_analysis_by_logaddr(self, parent_frame, data):
+        """LogAddr別の周期分析グラフを表示"""
+        # LogAddr別にデータを分類
+        logaddr_data = {}
+        
+        for packet in data:
+            if packet.get('TimeDiff') is not None and packet.get('EtherCAT'):
+                ethercat_data = packet['EtherCAT']
+                if 'EtherCAT_Datagrams' in ethercat_data:
+                    for datagram in ethercat_data['EtherCAT_Datagrams']:
+                        log_addr = datagram.get('LogAddr', 'Unknown')
+                        
+                        # ボード名を取得
+                        if self.board_parser:
+                            board_info = self.board_parser.get_formatted_board_info(log_addr)
+                        else:
+                            board_info = f"0x{log_addr}"
+                        
+                        if board_info not in logaddr_data:
+                            logaddr_data[board_info] = {'time_diffs': [], 'packet_numbers': []}
+                        logaddr_data[board_info]['time_diffs'].append(packet['TimeDiff'])
+                        logaddr_data[board_info]['packet_numbers'].append(packet['No'])
+        
+        if not logaddr_data:
+            Label(parent_frame, text="LogAddrデータがありません。").pack()
+            return
+        
+        # 上位10個のLogAddrのみ表示
+        sorted_addrs = sorted(logaddr_data.items(), 
+                            key=lambda x: len(x[1]['time_diffs']), reverse=True)[:10]
+        
+        # グラフを作成
+        num_addrs = len(sorted_addrs)
+        fig, axes = plt.subplots(num_addrs, 1, figsize=(12, 4 * num_addrs), squeeze=False)
+        
+        for idx, (addr, addr_info) in enumerate(sorted_addrs):
+            ax = axes[idx, 0]
+            
+            # 時間差の推移グラフ
+            ax.plot(addr_info['packet_numbers'], addr_info['time_diffs'], '-', linewidth=0.5)
+            ax.set_xlabel('パケット番号')
+            ax.set_ylabel('時間差 (ms)')
+            ax.set_title(f'LogAddr: {addr} ({len(addr_info["time_diffs"])}パケット)')
+            ax.grid(True, alpha=0.3)
+            
+            # 平均値を計算して表示
+            if addr_info['time_diffs']:
+                mean_diff = sum(addr_info['time_diffs']) / len(addr_info['time_diffs'])
+                ax.axhline(y=mean_diff, color='r', linestyle='--', 
+                          label=f'平均: {mean_diff:.3f}ms')
+                ax.legend()
+        
+        plt.tight_layout()
+        
+        # Tkinterに埋め込む
+        canvas = FigureCanvasTkAgg(fig, parent_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
 if __name__ == "__main__":
     root = Tk()
